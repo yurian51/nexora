@@ -1,0 +1,1 @@
+{"name":"yurian-wifi-billing","private":true,"version":"0.1.0","packageManager":"pnpm@10.12.4","scripts":{"dev":"pnpm --parallel --filter @yurian/api --filter @yurian/web dev","build":"pnpm -r build","lint":"pnpm -r lint","test":"pnpm -r test","typecheck":"pnpm -r typecheck"},"engines":{"node":">=22"},"devDependencies":{"typescript":"^5.8.3"}}
