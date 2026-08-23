@@ -2,7 +2,8 @@ import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from
 import { ConfigService } from '@nestjs/config';
 import { jwtVerify } from 'jose';
 
-export type AuthenticatedRequest = Request & {
+export type AuthenticatedRequest = {
+  headers: { authorization?: string };
   user?: {
     id: string;
     tenantId: string;
@@ -17,7 +18,7 @@ export class AuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    const authorization = request.headers.get('authorization');
+    const authorization = request.headers.authorization;
     if (!authorization?.startsWith('Bearer ')) throw new UnauthorizedException('Authentication required');
 
     const token = authorization.slice(7).trim();
