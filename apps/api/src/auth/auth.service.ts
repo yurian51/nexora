@@ -1,0 +1,137 @@
+import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Inject } from '@nestjs/common';
+import { Pool } from 'pg';
+import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
+import { SignJWT } from 'jose';
+import { PG_POOL } from '../database/database.module';
+import { LoginDto, RegisterDto } from './auth.dto';
+
+const scrypt = promisify(scryptCallback);
+const PASSWORD_KEY_LENGTH = 64;
+
+@Injectable()
+export class AuthService {
+  private readonly issuer = 'yurian-wifi-billing';
+
+  constructor(
+    @Inject(PG_POOL) private readonly db: Pool,
+    private readonly config: ConfigService,
+  ) {}
+
+  async register(input: RegisterDto) {
+    const slug = this.slugify(input.businessName);
+    const existing = await this.db.query('SELECT 1 FROM tenants WHERE slug = $1', [slug]);
+    if (existing.rowCount) throw new ConflictException('Business slug already exists');
+
+    const passwordHash = await this.hashPassword(input.password);
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const tenant = await client.query(
+        'INSERT INTO tenants (name, slug, status) VALUES ($1, $2, $3) RETURNING id, name, slug, status, currency, timezone',
+        [input.businessName.trim(), slug, 'TRIAL'],
+      );
+      const user = await client.query(
+        'INSERT INTO users (tenant_id, email, password_hash, full_name, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, tenant_id, email, full_name, role, is_active',
+        [tenant.rows[0].id, input.email.toLowerCase().trim(), passwordHash, input.fullName.trim(), 'OWNER'],
+      );
+      await client.query('COMMIT');
+      return this.issueTokens(user.rows[0], tenant.rows[0]);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async login(input: LoginDto) {
+    const result = await this.db.query(
+      `SELECT u.id, u.tenant_id, u.email, u.full_name, u.role, u.is_active,
+              u.password_hash, t.name AS tenant_name, t.slug AS tenant_slug,
+              t.status AS tenant_status, t.currency, t.timezone
+       FROM users u JOIN tenants t ON t.id = u.tenant_id
+       WHERE lower(u.email) = lower($1) LIMIT 1`,
+      [input.email.trim()],
+    );
+
+    const user = result.rows[0];
+    if (!user || !user.is_active || user.tenant_status === 'SUSPENDED' || user.tenant_status === 'ARCHIVED') {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const valid = await this.verifyPassword(input.password, user.password_hash);
+    if (!valid) throw new UnauthorizedException('Invalid credentials');
+
+    return this.issueTokens(user, {
+      id: user.tenant_id,
+      name: user.tenant_name,
+      slug: user.tenant_slug,
+      status: user.tenant_status,
+      currency: user.currency,
+      timezone: user.timezone,
+    });
+  }
+
+  private async issueTokens(user: any, tenant: any) {
+    const secret = this.config.get<string>('JWT_SECRET');
+    if (!secret || secret.length < 32) throw new Error('JWT_SECRET must be configured with at least 32 characters');
+
+    const key = new TextEncoder().encode(secret);
+    const accessToken = await new SignJWT({
+      sub: user.id,
+      tenantId: tenant.id,
+      role: user.role,
+      email: user.email,
+    })
+      .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+      .setIssuer(this.issuer)
+      .setAudience('yurian-wifi-api')
+      .setIssuedAt()
+      .setExpirationTime('15m')
+      .sign(key);
+
+    return {
+      accessToken,
+      tokenType: 'Bearer',
+      expiresIn: 900,
+      user: {
+        id: user.id,
+        tenantId: tenant.id,
+        email: user.email,
+        fullName: user.full_name,
+        role: user.role,
+      },
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        status: tenant.status,
+        currency: tenant.currency,
+        timezone: tenant.timezone,
+      },
+    };
+  }
+
+  private async hashPassword(password: string) {
+    const salt = randomBytes(16);
+    const derived = (await scrypt(password, salt, PASSWORD_KEY_LENGTH)) as Buffer;
+    return `scrypt$${salt.toString('base64url')}$${derived.toString('base64url')}`;
+  }
+
+  private async verifyPassword(password: string, stored: string) {
+    const [scheme, saltEncoded, hashEncoded] = stored.split('$');
+    if (scheme !== 'scrypt' || !saltEncoded || !hashEncoded) return false;
+    const salt = Buffer.from(saltEncoded, 'base64url');
+    const expected = Buffer.from(hashEncoded, 'base64url');
+    const actual = (await scrypt(password, salt, PASSWORD_KEY_LENGTH)) as Buffer;
+    return expected.length === actual.length && timingSafeEqual(expected, actual);
+  }
+
+  private slugify(value: string) {
+    const base = value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 70);
+    return base || `business-${randomBytes(4).toString('hex')}`;
+  }
+}
