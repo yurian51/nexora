@@ -9,6 +9,21 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: nexora
+          POSTGRES_PASSWORD: nexora
+          POSTGRES_DB: nexora_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexora -d nexora_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,6 +49,16 @@ jobs:
 
       - name: Build API
         run: pnpm --filter @nexora/api build
+
+      - name: Apply database migrations
+        env:
+          DATABASE_URL: postgresql://nexora:nexora@localhost:5432/nexora_ci
+        run: pnpm --filter @nexora/api migrate
+
+      - name: Verify migrations are idempotent
+        env:
+          DATABASE_URL: postgresql://nexora:nexora@localhost:5432/nexora_ci
+        run: pnpm --filter @nexora/api migrate
 
       - name: Build Web
         run: pnpm --filter @nexora/web build
