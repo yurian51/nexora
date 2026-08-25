@@ -10,11 +10,11 @@ import { LoginDto, RegisterDto } from './auth.dto';
 
 const scrypt = promisify(scryptCallback);
 const PASSWORD_KEY_LENGTH = 64;
+const ISSUER = 'nexora';
+const AUDIENCE = 'nexora-api';
 
 @Injectable()
 export class AuthService {
-  private readonly issuer = 'yurian-wifi-billing';
-
   constructor(
     @Inject(PG_POOL) private readonly db: Pool,
     private readonly config: ConfigService,
@@ -87,8 +87,8 @@ export class AuthService {
       email: user.email,
     })
       .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
-      .setIssuer(this.issuer)
-      .setAudience('yurian-wifi-api')
+      .setIssuer(ISSUER)
+      .setAudience(AUDIENCE)
       .setIssuedAt()
       .setExpirationTime('15m')
       .sign(key);
