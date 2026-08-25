@@ -1,26 +1,30 @@
-import { IsBoolean, IsEmail, IsOptional, IsString, Length } from 'class-validator';
+import { IsBoolean, IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class CreateCustomerDto {
-  @IsOptional()
   @IsString()
-  @Length(2, 160)
-  fullName?: string;
+  @MinLength(2)
+  @MaxLength(120)
+  fullName!: string;
 
-  @IsOptional()
   @IsString()
-  @Length(5, 32)
-  phone?: string;
+  @MinLength(5)
+  @MaxLength(32)
+  username!: string;
 
   @IsOptional()
   @IsEmail()
+  @MaxLength(160)
   email?: string;
 
   @IsOptional()
   @IsString()
-  @Length(3, 100)
-  username?: string;
+  @MaxLength(32)
+  phone?: string;
+}
 
-  @IsOptional()
-  @IsBoolean()
-  isActive?: boolean;
+export class UpdateCustomerDto {
+  @IsOptional() @IsString() @MinLength(2) @MaxLength(120) fullName?: string;
+  @IsOptional() @IsEmail() @MaxLength(160) email?: string;
+  @IsOptional() @IsString() @MaxLength(32) phone?: string;
+  @IsOptional() @IsBoolean() isActive?: boolean;
 }
