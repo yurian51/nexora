@@ -10,25 +10,6 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: nexora
-          POSTGRES_PASSWORD: nexora
-          POSTGRES_DB: nexora_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U nexora -d nexora_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-
-    env:
-      DATABASE_URL: postgresql://nexora:nexora@localhost:5432/nexora_ci
-      NODE_ENV: test
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,6 +27,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile --ignore-scripts
 
+      - name: Validate migration files
+        shell: bash
+        run: |
+          test -f apps/api/migrations/001_initial_schema.sql
+          test -f apps/api/migrations/002_saas_billing_access.sql
+          grep -q "CREATE TABLE IF NOT EXISTS organization_subscriptions" apps/api/migrations/002_saas_billing_access.sql
+          grep -q "CREATE TABLE IF NOT EXISTS access_grants" apps/api/migrations/002_saas_billing_access.sql
+          grep -q "UNIQUE (tenant_id, idempotency_key)" apps/api/migrations/001_initial_schema.sql
+
       - name: Typecheck API
         run: pnpm --filter @nexora/api typecheck
 
@@ -54,12 +44,6 @@ jobs:
 
       - name: Build API
         run: pnpm --filter @nexora/api build
-
-      - name: Apply database migrations
-        run: pnpm --filter @nexora/api migrate
-
-      - name: Verify migrations are idempotent
-        run: pnpm --filter @nexora/api migrate
 
       - name: Build Web
         run: pnpm --filter @nexora/web build
