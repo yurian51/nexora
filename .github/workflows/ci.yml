@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'feat/**', 'build**']
+    branches: [main, 'feat/**', 'fix/**', 'build**']
   pull_request:
     branches: [main]
 
@@ -22,18 +22,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile --ignore-scripts
+        run: pnpm install --frozen-lockfile
 
-      - name: Typecheck API
-        run: pnpm --filter @nexora/api typecheck
+      - name: Lint
+        run: pnpm lint
 
-      - name: Typecheck Web
-        run: pnpm --filter @nexora/web typecheck
+      - name: Typecheck
+        run: pnpm typecheck
 
-      - name: Build API
-        run: pnpm --filter @nexora/api build
+      - name: Test
+        run: pnpm test
 
-      - name: Build Web
-        run: pnpm --filter @nexora/web build
+      - name: Build
+        run: pnpm build
