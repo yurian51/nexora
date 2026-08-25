@@ -1,0 +1,1 @@
+BillingModule must be imported by AppModule after the billing-domain-model migration is applied.
