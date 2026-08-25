@@ -27,7 +27,13 @@ jobs:
         run: pnpm install --no-frozen-lockfile --ignore-scripts
 
       - name: Typecheck API
-        run: pnpm --filter @yurian/api typecheck
+        run: pnpm --filter @nexora/api typecheck
 
       - name: Typecheck Web
-        run: pnpm --filter @yurian/web typecheck
+        run: pnpm --filter @nexora/web typecheck
+
+      - name: Build API
+        run: pnpm --filter @nexora/api build
+
+      - name: Build Web
+        run: pnpm --filter @nexora/web build

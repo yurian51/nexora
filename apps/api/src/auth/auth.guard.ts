@@ -27,8 +27,8 @@ export class AuthGuard implements CanActivate {
 
     try {
       const { payload } = await jwtVerify(token, new TextEncoder().encode(secret), {
-        issuer: 'yurian-wifi-billing',
-        audience: 'yurian-wifi-api',
+        issuer: 'nexora',
+        audience: 'nexora-api',
       });
       if (typeof payload.sub !== 'string' || typeof payload.tenantId !== 'string' || typeof payload.role !== 'string') {
         throw new Error('Invalid claims');
