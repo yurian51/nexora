@@ -1,7 +1,8 @@
-import { readFile } from 'node:fs/promises';
-import { readdir } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Client } from 'pg';
+
+const MIGRATION_LOCK_KEY = 7_421_931;
 
 async function main() {
   const connectionString = process.env.DATABASE_URL;
@@ -11,7 +12,9 @@ async function main() {
   await client.connect();
 
   try {
+    await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY]);
     await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())');
+
     const migrationDir = join(process.cwd(), 'migrations');
     const files = (await readdir(migrationDir))
       .filter((file) => /^\d+_.+\.sql$/.test(file))
@@ -35,6 +38,7 @@ async function main() {
       }
     }
   } finally {
+    await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY]).catch(() => undefined);
     await client.end();
   }
 }
