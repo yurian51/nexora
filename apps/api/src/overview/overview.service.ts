@@ -8,10 +8,7 @@ export class OverviewService {
 
   async getOverview(tenantId: string) {
     const [tenant, customers, sessions, routers, payments, locations, liveSessions] = await Promise.all([
-      this.db.query(
-        `SELECT id, name, currency, timezone, status FROM tenants WHERE id = $1`,
-        [tenantId],
-      ),
+      this.db.query(`SELECT id, name, currency, timezone, status FROM tenants WHERE id = $1`, [tenantId]),
       this.db.query(
         `SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE is_active)::int AS active
          FROM customers WHERE tenant_id = $1`,
@@ -43,11 +40,9 @@ export class OverviewService {
         `SELECT l.id, l.name,
                 COUNT(DISTINCT r.id)::int AS routers,
                 COALESCE(SUM(r.active_users), 0)::int AS active_users,
-                COUNT(DISTINCT c.id)::int AS customers,
                 COUNT(DISTINCT CASE WHEN r.status = 'ONLINE' THEN r.id END)::int AS online_routers
          FROM locations l
          LEFT JOIN routers r ON r.location_id = l.id AND r.tenant_id = $1
-         LEFT JOIN customers c ON c.tenant_id = $1
          WHERE l.tenant_id = $1
          GROUP BY l.id, l.name
          ORDER BY active_users DESC, l.name ASC
@@ -106,7 +101,6 @@ export class OverviewService {
         name: row.name,
         routers: Number(row.routers),
         activeUsers: Number(row.active_users),
-        customers: Number(row.customers),
         onlineRouters: Number(row.online_routers),
       })),
       sessions: liveSessions.rows.map((row) => ({
