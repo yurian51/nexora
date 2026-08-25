@@ -169,11 +169,4 @@ CREATE TABLE IF NOT EXISTS vouchers (
 );
 CREATE INDEX IF NOT EXISTS vouchers_tenant_status_idx ON vouchers (tenant_id, status);
 
-CREATE TABLE IF NOT EXISTS migration_lock (
-  id boolean PRIMARY KEY DEFAULT true CHECK (id)
-);
-INSERT INTO migration_lock (id) VALUES (true) ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO schema_migrations (version) VALUES ('001_initial_schema') ON CONFLICT (version) DO NOTHING;
-
 COMMIT;
