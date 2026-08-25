@@ -2,13 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main, 'feat/**', 'build**']
+    branches: [main, 'feat/**', 'fix/**', 'build**']
   pull_request:
     branches: [main]
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -23,6 +24,10 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://nexora:nexora@localhost:5432/nexora_ci
+      NODE_ENV: test
 
     steps:
       - name: Checkout
@@ -51,13 +56,9 @@ jobs:
         run: pnpm --filter @nexora/api build
 
       - name: Apply database migrations
-        env:
-          DATABASE_URL: postgresql://nexora:nexora@localhost:5432/nexora_ci
         run: pnpm --filter @nexora/api migrate
 
       - name: Verify migrations are idempotent
-        env:
-          DATABASE_URL: postgresql://nexora:nexora@localhost:5432/nexora_ci
         run: pnpm --filter @nexora/api migrate
 
       - name: Build Web
