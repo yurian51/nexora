@@ -3,6 +3,8 @@ import { AuthGuard, AuthenticatedRequest } from '../auth/auth.guard';
 import { CreateWifiPurchaseDto, InitiatePaymentDto, PaymentWebhookDto } from './billing.dto';
 import { BillingService } from './billing.service';
 
+type WebhookRequest = { rawBody?: Buffer; params: { provider: string } };
+
 @Controller('billing')
 export class BillingController {
   constructor(private readonly billing: BillingService) {}
@@ -27,15 +29,13 @@ export class BillingController {
 
   @Post('webhooks/:provider')
   async paymentWebhook(
-    @Req() req: { rawBody?: Buffer },
+    @Req() req: WebhookRequest,
     @Headers('x-nexora-signature') signature: string | undefined,
     @Headers('x-payment-signature') providerSignature: string | undefined,
-    @Req() request: { params: { provider: string } },
     @Body() dto: PaymentWebhookDto,
   ) {
-    const rawBody = req.rawBody;
-    if (!rawBody) throw new UnauthorizedException('Raw webhook body is unavailable');
-    this.billing.verifyWebhookSignature(rawBody, signature ?? providerSignature);
-    return this.billing.processPaymentWebhook(request.params.provider, dto);
+    if (!req.rawBody) throw new UnauthorizedException('Raw webhook body is unavailable');
+    this.billing.verifyWebhookSignature(req.rawBody, signature ?? providerSignature);
+    return this.billing.processPaymentWebhook(req.params.provider, dto);
   }
 }
