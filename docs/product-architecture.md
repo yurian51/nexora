@@ -1,13 +1,17 @@
-# YURIAN WiFi Billing — Product Architecture
+# NEXORA — Product Architecture
 
 ## Product position
-YURIAN WiFi Billing is a multi-tenant WiFi business and ISP operations platform for hotspot billing, vouchers, subscriptions, payments, network operations and customer management.
+NEXORA is a multi-tenant connected-business and ISP operations platform for hotspot billing, vouchers, subscriptions, payments, network operations and customer management.
+
+## Brand
+**NEXORA**  
+*The Operating Platform for Connected Businesses.*
 
 ## Core domains
 - Identity, organization and tenant isolation
 - Customers and devices
 - Sites and routers
-- Packages and voucher batches
+- Plans and voucher batches
 - Subscriptions and sessions
 - Payments and reconciliation
 - Captive portal
@@ -35,7 +39,7 @@ FreeRADIUS is an integration boundary, not a reason to leak billing rules into r
 1. CI/build verification
 2. Auth + tenant isolation + RBAC
 3. Customers, sites and routers
-4. Packages + voucher engine
+4. Plans + voucher engine
 5. Sessions and subscriptions
 6. Payment abstraction + webhook idempotency
 7. MikroTik adapter + router health
