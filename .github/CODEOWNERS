@@ -1,0 +1,15 @@
+# NEXORA CODEOWNERS
+# Production ownership. Expand by domain when additional maintainers are added.
+* @yurian51
+
+# Application domains
+/apps/api/ @yurian51
+/apps/web/ @yurian51
+/packages/ @yurian51
+
+# Infrastructure and release controls
+/.github/ @yurian51
+/scripts/ @yurian51
+
+# Database and migrations
+/database/ @yurian51
