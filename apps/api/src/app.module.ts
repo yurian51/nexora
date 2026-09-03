@@ -7,8 +7,9 @@ import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
 import { OverviewModule } from './overview/overview.module';
 import { PackagesModule } from './packages/packages.module';
+import { PurchasesModule } from './purchases/purchases.module';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), DatabaseModule, AuthModule, HealthModule, OverviewModule, CustomersModule, BillingModule, PackagesModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), DatabaseModule, AuthModule, HealthModule, OverviewModule, CustomersModule, BillingModule, PackagesModule, PurchasesModule],
 })
 export class AppModule {}
