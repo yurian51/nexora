@@ -1,11 +1,16 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { CreatePaymentIntentDto, PaymentWebhookDto } from './payments.dto';
 
 @Injectable()
 export class PaymentsService {
-  constructor(@Inject(PG_POOL) private readonly db: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private readonly db: Pool,
+    private readonly config: ConfigService,
+  ) {}
 
   async list(tenantId: string) {
     const result = await this.db.query(
@@ -44,26 +49,70 @@ export class PaymentsService {
     } finally { client.release(); }
   }
 
-  async webhook(tenantId: string, input: PaymentWebhookDto) {
+  private async resolveWebhookSecret(tenantId: string, provider: string): Promise<string> {
+    const result = await this.db.query(
+      `SELECT webhook_secret_ref AS "webhookSecretRef" FROM payment_provider_configs WHERE tenant_id=$1 AND provider=$2 AND is_active=true`,
+      [tenantId, provider],
+    );
+    const ref = result.rows[0]?.webhookSecretRef as string | undefined;
+    const secret = ref ? this.config.get<string>(ref) : undefined;
+    if (!secret) throw new UnauthorizedException('Webhook provider is not configured');
+    return secret;
+  }
+
+  private verifyWebhookSignature(secret: string, rawBody: Buffer, signature: string | undefined) {
+    if (!signature) throw new UnauthorizedException('Missing webhook signature');
+    const supplied = signature.trim().replace(/^sha256=/i, '');
+    if (!/^[a-f0-9]{64}$/i.test(supplied)) throw new UnauthorizedException('Invalid webhook signature');
+    const expected = createHmac('sha256', secret).update(rawBody).digest('hex');
+    const left = Buffer.from(supplied, 'hex');
+    const right = Buffer.from(expected, 'hex');
+    if (left.length !== right.length || !timingSafeEqual(left, right)) throw new UnauthorizedException('Invalid webhook signature');
+  }
+
+  async webhook(tenantId: string, input: PaymentWebhookDto, rawBody: Buffer, signature?: string) {
+    const provider = input.provider.trim().toLowerCase();
+    const secret = await this.resolveWebhookSecret(tenantId, provider);
+    this.verifyWebhookSignature(secret, rawBody, signature);
+
+    const eventClient = await this.db.connect();
+    let eventId: string;
+    try {
+      await eventClient.query('BEGIN');
+      const event = await eventClient.query(
+        `INSERT INTO payment_events (tenant_id, payment_id, provider, provider_event_id, event_type, payload, signature_valid, processing_status) VALUES ($1,NULL,$2,$3,$4,$5,true,'RECEIVED') ON CONFLICT (provider, provider_event_id) DO NOTHING RETURNING id`,
+        [tenantId, provider, input.providerEventId.trim(), input.eventType.trim(), input.payload ?? {}],
+      );
+      if (!event.rowCount) {
+        await eventClient.query('COMMIT');
+        return { accepted: true, duplicate: true };
+      }
+      eventId = event.rows[0].id;
+      await eventClient.query('COMMIT');
+    } catch (error: any) {
+      await eventClient.query('ROLLBACK');
+      if (error?.code === '23505') return { accepted: true, duplicate: true };
+      throw error;
+    } finally { eventClient.release(); }
+
     const client = await this.db.connect();
     try {
       await client.query('BEGIN');
-      const event = await client.query(
-        `INSERT INTO payment_events (tenant_id, payment_id, provider, provider_event_id, event_type, payload, signature_valid, processed_at) VALUES ($1,NULL,$2,$3,$4,$5,true,now()) ON CONFLICT (provider, provider_event_id) DO NOTHING RETURNING id`,
-        [tenantId, input.provider.trim(), input.providerEventId.trim(), input.eventType.trim(), input.payload ?? {}],
-      );
-      if (!event.rowCount) { await client.query('COMMIT'); return { accepted: true, duplicate: true }; }
       let paymentId: string | undefined;
       if (input.purchaseId) {
         const payment = await client.query(`SELECT id FROM payments WHERE tenant_id=$1 AND purchase_id=$2 ORDER BY created_at DESC LIMIT 1 FOR UPDATE`, [tenantId, input.purchaseId]);
         paymentId = payment.rows[0]?.id;
       } else if (input.providerReference) {
-        const payment = await client.query(`SELECT id FROM payments WHERE tenant_id=$1 AND provider=$2 AND provider_reference=$3 FOR UPDATE`, [tenantId, input.provider.trim(), input.providerReference.trim()]);
+        const payment = await client.query(`SELECT id FROM payments WHERE tenant_id=$1 AND provider=$2 AND provider_reference=$3 FOR UPDATE`, [tenantId, provider, input.providerReference.trim()]);
         paymentId = payment.rows[0]?.id;
       }
       if (!paymentId) throw new NotFoundException('Payment could not be resolved');
-      await client.query(`UPDATE payment_events SET payment_id=$1 WHERE tenant_id=$2 AND id=$3`, [paymentId, tenantId, event.rows[0].id]);
-      await client.query(`UPDATE payments SET provider_reference=COALESCE($2, provider_reference), status=$3, raw_payload=$4, updated_at=now() WHERE tenant_id=$1 AND id=$5`, [tenantId, input.providerReference?.trim() ?? null, input.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED', input.payload ?? {}, paymentId]);
+
+      await client.query(`UPDATE payment_events SET payment_id=$1 WHERE tenant_id=$2 AND id=$3`, [paymentId, tenantId, eventId]);
+      await client.query(
+        `UPDATE payments SET provider_reference=COALESCE($2, provider_reference), status=$3, raw_payload=$4, updated_at=now() WHERE tenant_id=$1 AND id=$5`,
+        [tenantId, input.providerReference?.trim() ?? null, input.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED', input.payload ?? {}, paymentId],
+      );
       const payment = await client.query(`SELECT purchase_id FROM payments WHERE tenant_id=$1 AND id=$2`, [tenantId, paymentId]);
       if (input.status === 'SUCCESS' && payment.rows[0]?.purchase_id) {
         const purchase = await client.query(`SELECT id, package_id, customer_id, router_id, status FROM wifi_plan_purchases WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, payment.rows[0].purchase_id]);
@@ -75,10 +124,12 @@ export class PaymentsService {
         }
       }
       if (input.status === 'FAILED' && payment.rows[0]?.purchase_id) await client.query(`UPDATE wifi_plan_purchases SET status='CANCELED', updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='PENDING_PAYMENT'`, [tenantId, payment.rows[0].purchase_id]);
+      await client.query(`UPDATE payment_events SET processing_status='PROCESSED', processed_at=now() WHERE tenant_id=$1 AND id=$2`, [tenantId, eventId]);
       await client.query('COMMIT');
       return { accepted: true, duplicate: false, paymentId };
     } catch (error: any) {
       await client.query('ROLLBACK');
+      await this.db.query(`UPDATE payment_events SET processing_status='FAILED' WHERE tenant_id=$1 AND id=$2`, [tenantId, eventId]).catch(() => undefined);
       if (error?.code === '23505') throw new ConflictException('Payment event already exists');
       throw error;
     } finally { client.release(); }
