@@ -32,8 +32,12 @@ jobs:
         run: |
           test -f apps/api/migrations/001_initial_schema.sql
           test -f apps/api/migrations/002_saas_billing_access.sql
+          test -f apps/api/migrations/005_payment_hardening.sql
+          test -f apps/api/migrations/006_payment_provider_configs.sql
           grep -q "CREATE TABLE IF NOT EXISTS organization_subscriptions" apps/api/migrations/002_saas_billing_access.sql
           grep -q "CREATE TABLE IF NOT EXISTS access_grants" apps/api/migrations/002_saas_billing_access.sql
+          grep -q "processing_status" apps/api/migrations/005_payment_hardening.sql
+          grep -q "CREATE TABLE IF NOT EXISTS payment_provider_configs" apps/api/migrations/006_payment_provider_configs.sql
           grep -q "UNIQUE (tenant_id, idempotency_key)" apps/api/migrations/001_initial_schema.sql
 
       - name: Typecheck API
