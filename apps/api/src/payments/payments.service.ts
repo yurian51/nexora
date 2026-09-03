@@ -1,0 +1,86 @@
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Pool } from 'pg';
+import { PG_POOL } from '../database/database.module';
+import { CreatePaymentIntentDto, PaymentWebhookDto } from './payments.dto';
+
+@Injectable()
+export class PaymentsService {
+  constructor(@Inject(PG_POOL) private readonly db: Pool) {}
+
+  async list(tenantId: string) {
+    const result = await this.db.query(
+      `SELECT id, customer_id AS "customerId", purchase_id AS "purchaseId", provider, provider_reference AS "providerReference", amount, currency, status, idempotency_key AS "idempotencyKey", created_at AS "createdAt", updated_at AS "updatedAt" FROM payments WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 200`,
+      [tenantId],
+    );
+    return { data: result.rows };
+  }
+
+  async createIntent(tenantId: string, input: CreatePaymentIntentDto) {
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const purchase = await client.query(
+        `SELECT id, customer_id, price, currency, status FROM wifi_plan_purchases WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+        [tenantId, input.purchaseId],
+      );
+      if (!purchase.rowCount) throw new NotFoundException('Purchase not found');
+      if (purchase.rows[0].status !== 'PENDING_PAYMENT') throw new ConflictException(`Purchase is ${purchase.rows[0].status}`);
+      const key = input.idempotencyKey?.trim() || `intent:${input.purchaseId}:${input.provider.trim().toLowerCase()}`;
+      const existing = await client.query(`SELECT id, status, provider FROM payments WHERE tenant_id=$1 AND idempotency_key=$2`, [tenantId, key]);
+      if (existing.rowCount) {
+        await client.query('COMMIT');
+        return { id: existing.rows[0].id, status: existing.rows[0].status, provider: existing.rows[0].provider, idempotencyKey: key, reused: true };
+      }
+      const result = await client.query(
+        `INSERT INTO payments (tenant_id, customer_id, purchase_id, provider, amount, currency, status, idempotency_key) VALUES ($1,$2,$3,$4,$5,$6,'PENDING',$7) RETURNING id, customer_id AS "customerId", purchase_id AS "purchaseId", provider, amount, currency, status, idempotency_key AS "idempotencyKey", created_at AS "createdAt"`,
+        [tenantId, purchase.rows[0].customer_id, input.purchaseId, input.provider.trim(), purchase.rows[0].price, purchase.rows[0].currency, key],
+      );
+      await client.query('COMMIT');
+      return { ...result.rows[0], reused: false };
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      if (error?.code === '23505') throw new ConflictException('Payment intent already exists');
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async webhook(tenantId: string, input: PaymentWebhookDto) {
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const event = await client.query(
+        `INSERT INTO payment_events (tenant_id, payment_id, provider, provider_event_id, event_type, payload, signature_valid, processed_at) VALUES ($1,NULL,$2,$3,$4,$5,true,now()) ON CONFLICT (provider, provider_event_id) DO NOTHING RETURNING id`,
+        [tenantId, input.provider.trim(), input.providerEventId.trim(), input.eventType.trim(), input.payload ?? {}],
+      );
+      if (!event.rowCount) { await client.query('COMMIT'); return { accepted: true, duplicate: true }; }
+      let paymentId: string | undefined;
+      if (input.purchaseId) {
+        const payment = await client.query(`SELECT id FROM payments WHERE tenant_id=$1 AND purchase_id=$2 ORDER BY created_at DESC LIMIT 1 FOR UPDATE`, [tenantId, input.purchaseId]);
+        paymentId = payment.rows[0]?.id;
+      } else if (input.providerReference) {
+        const payment = await client.query(`SELECT id FROM payments WHERE tenant_id=$1 AND provider=$2 AND provider_reference=$3 FOR UPDATE`, [tenantId, input.provider.trim(), input.providerReference.trim()]);
+        paymentId = payment.rows[0]?.id;
+      }
+      if (!paymentId) throw new NotFoundException('Payment could not be resolved');
+      await client.query(`UPDATE payment_events SET payment_id=$1 WHERE tenant_id=$2 AND id=$3`, [paymentId, tenantId, event.rows[0].id]);
+      await client.query(`UPDATE payments SET provider_reference=COALESCE($2, provider_reference), status=$3, raw_payload=$4, updated_at=now() WHERE tenant_id=$1 AND id=$5`, [tenantId, input.providerReference?.trim() ?? null, input.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED', input.payload ?? {}, paymentId]);
+      const payment = await client.query(`SELECT purchase_id FROM payments WHERE tenant_id=$1 AND id=$2`, [tenantId, paymentId]);
+      if (input.status === 'SUCCESS' && payment.rows[0]?.purchase_id) {
+        const purchase = await client.query(`SELECT id, package_id, customer_id, router_id, status FROM wifi_plan_purchases WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenantId, payment.rows[0].purchase_id]);
+        if (purchase.rowCount && purchase.rows[0].status === 'PENDING_PAYMENT') {
+          const pkg = await client.query(`SELECT duration_seconds FROM packages WHERE tenant_id=$1 AND id=$2`, [tenantId, purchase.rows[0].package_id]);
+          if (!pkg.rowCount) throw new NotFoundException('Package not found');
+          await client.query(`UPDATE wifi_plan_purchases SET status='PAID', starts_at=now(), ends_at=now()+($3::bigint * interval '1 second'), updated_at=now() WHERE tenant_id=$1 AND id=$2`, [tenantId, purchase.rows[0].id, pkg.rows[0].duration_seconds]);
+          await client.query(`INSERT INTO access_grants (tenant_id,purchase_id,customer_id,router_id,status,starts_at,ends_at) SELECT tenant_id,id,customer_id,router_id,'ACTIVE',starts_at,ends_at FROM wifi_plan_purchases WHERE tenant_id=$1 AND id=$2 ON CONFLICT (purchase_id) DO UPDATE SET status='ACTIVE',starts_at=EXCLUDED.starts_at,ends_at=EXCLUDED.ends_at,updated_at=now()`, [tenantId, purchase.rows[0].id]);
+        }
+      }
+      if (input.status === 'FAILED' && payment.rows[0]?.purchase_id) await client.query(`UPDATE wifi_plan_purchases SET status='CANCELED', updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='PENDING_PAYMENT'`, [tenantId, payment.rows[0].purchase_id]);
+      await client.query('COMMIT');
+      return { accepted: true, duplicate: false, paymentId };
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      if (error?.code === '23505') throw new ConflictException('Payment event already exists');
+      throw error;
+    } finally { client.release(); }
+  }
+}
