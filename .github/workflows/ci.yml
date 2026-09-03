@@ -42,6 +42,9 @@ jobs:
       - name: Typecheck Web
         run: pnpm --filter @nexora/web typecheck
 
+      - name: Test API
+        run: pnpm --filter @nexora/api test
+
       - name: Build API
         run: pnpm --filter @nexora/api build
 
