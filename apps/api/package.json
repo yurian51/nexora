@@ -27,8 +27,11 @@
     "@nestjs/cli": "^11.0.6",
     "@nestjs/schematics": "^11.0.3",
     "@nestjs/testing": "^11.0.11",
+    "@types/jest": "^30.0.0",
     "@types/node": "^22.15.30",
     "@types/pg": "^8.15.5",
+    "jest": "^30.0.5",
+    "ts-jest": "^29.4.0",
     "typescript": "^5.8.3"
   }
 }
