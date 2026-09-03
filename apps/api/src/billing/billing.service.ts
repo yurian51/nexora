@@ -86,63 +86,92 @@ export class BillingService {
   }
 
   async initiatePayment(tenantId: string, dto: InitiatePaymentDto) {
-    const purchase = await this.db.query(
-      `SELECT id, customer_id, price, currency, status
-       FROM wifi_plan_purchases
-       WHERE tenant_id = $1 AND id = $2`,
-      [tenantId, dto.purchaseId],
-    );
-
-    if (!purchase.rowCount) throw new NotFoundException('WiFi purchase not found');
-    if (purchase.rows[0].status !== 'PENDING_PAYMENT') {
-      throw new ConflictException('Purchase is not awaiting payment');
-    }
-
-    const existing = await this.db.query(
-      `SELECT id, purchase_id, provider, provider_reference, status, amount, currency, idempotency_key, created_at
-       FROM payments
-       WHERE tenant_id = $1 AND idempotency_key = $2`,
-      [tenantId, dto.idempotencyKey],
-    );
-    if (existing.rowCount) {
-      const payment = existing.rows[0];
-      if (payment.purchase_id !== dto.purchaseId) {
-        throw new ConflictException('Idempotency key is already used for another purchase');
-      }
-      return payment;
-    }
-
+    const client = await this.db.connect();
     try {
-      const payment = await this.db.query(
-        `INSERT INTO payments
-           (tenant_id, customer_id, purchase_id, provider, amount, currency, status, idempotency_key)
-         VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7)
-         RETURNING id, purchase_id, provider, amount, currency, status, idempotency_key, created_at`,
-        [
-          tenantId,
-          purchase.rows[0].customer_id,
-          dto.purchaseId,
-          dto.provider,
-          purchase.rows[0].price,
-          purchase.rows[0].currency,
-          dto.idempotencyKey,
-        ],
-      );
-      return payment.rows[0];
-    } catch (error: any) {
-      if (error?.code !== '23505') throw error;
+      await client.query('BEGIN');
 
-      const concurrent = await this.db.query(
+      const purchase = await client.query(
+        `SELECT id, customer_id, price, currency, status
+         FROM wifi_plan_purchases
+         WHERE tenant_id = $1 AND id = $2
+         FOR UPDATE`,
+        [tenantId, dto.purchaseId],
+      );
+
+      if (!purchase.rowCount) throw new NotFoundException('WiFi purchase not found');
+      if (purchase.rows[0].status !== 'PENDING_PAYMENT') {
+        throw new ConflictException('Purchase is not awaiting payment');
+      }
+
+      const existing = await client.query(
         `SELECT id, purchase_id, provider, provider_reference, status, amount, currency, idempotency_key, created_at
          FROM payments
          WHERE tenant_id = $1 AND idempotency_key = $2`,
         [tenantId, dto.idempotencyKey],
       );
-      if (!concurrent.rowCount) throw error;
-      if (concurrent.rows[0].purchase_id !== dto.purchaseId) {
-        throw new ConflictException('Idempotency key is already used for another purchase');
+      if (existing.rowCount) {
+        const payment = existing.rows[0];
+        if (payment.purchase_id !== dto.purchaseId) {
+          throw new ConflictException('Idempotency key is already used for another purchase');
+        }
+        await client.query('COMMIT');
+        return payment;
       }
-      return concurrent.rows[0];
+
+      try {
+        const payment = await client.query(
+          `INSERT INTO payments
+             (tenant_id, customer_id, purchase_id, provider, amount, currency, status, idempotency_key)
+           VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7)
+           RETURNING id, purchase_id, provider, amount, currency, status, idempotency_key, created_at`,
+          [
+            tenantId,
+            purchase.rows[0].customer_id,
+            dto.purchaseId,
+            dto.provider,
+            purchase.rows[0].price,
+            purchase.rows[0].currency,
+            dto.idempotencyKey,
+          ],
+        );
+
+        await client.query('COMMIT');
+        return payment.rows[0];
+      } catch (error: any) {
+        if (error?.code !== '23505') throw error;
+
+        const concurrent = await client.query(
+          `SELECT id, purchase_id, provider, provider_reference, status, amount, currency, idempotency_key, created_at
+           FROM payments
+           WHERE tenant_id = $1 AND idempotency_key = $2`,
+          [tenantId, dto.idempotencyKey],
+        );
+        if (concurrent.rowCount) {
+          const payment = concurrent.rows[0];
+          if (payment.purchase_id !== dto.purchaseId) {
+            throw new ConflictException('Idempotency key is already used for another purchase');
+          }
+          await client.query('COMMIT');
+          return payment;
+        }
+
+        const pending = await client.query(
+          `SELECT id
+           FROM payments
+           WHERE tenant_id = $1 AND purchase_id = $2 AND status = 'PENDING'
+           LIMIT 1`,
+          [tenantId, dto.purchaseId],
+        );
+        if (pending.rowCount) {
+          throw new ConflictException('A payment is already pending for this purchase');
+        }
+        throw error;
+      }
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
     }
   }
 }
