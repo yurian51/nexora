@@ -32,9 +32,11 @@ jobs:
         run: |
           test -f apps/api/migrations/001_initial_schema.sql
           test -f apps/api/migrations/002_saas_billing_access.sql
+          test -f apps/api/migrations/003_billing_payment_safety.sql
           grep -q "CREATE TABLE IF NOT EXISTS organization_subscriptions" apps/api/migrations/002_saas_billing_access.sql
           grep -q "CREATE TABLE IF NOT EXISTS access_grants" apps/api/migrations/002_saas_billing_access.sql
           grep -q "UNIQUE (tenant_id, idempotency_key)" apps/api/migrations/001_initial_schema.sql
+          grep -q "payments_one_pending_per_purchase_uq" apps/api/migrations/003_billing_payment_safety.sql
 
       - name: Typecheck API
         run: pnpm --filter @nexora/api typecheck
