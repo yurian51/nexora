@@ -1,4 +1,8 @@
+import { Transform } from 'class-transformer';
 import { IsBoolean, IsEmail, IsInt, IsOptional, IsString, MaxLength, MinLength, Min, Max } from 'class-validator';
+
+const toInt = ({ value }: { value: unknown }) => value === undefined || value === '' ? value : Number(value);
+const toBoolean = ({ value }: { value: unknown }) => value === undefined || value === '' ? value : value === true || value === 'true';
 
 export class ListCustomersQueryDto {
   @IsOptional()
@@ -6,18 +10,21 @@ export class ListCustomersQueryDto {
   @MaxLength(120)
   search?: string;
 
+  @Transform(toInt)
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(100)
+  @Max(10000)
   page = 1;
 
+  @Transform(toInt)
   @IsOptional()
   @IsInt()
   @Min(1)
   @Max(100)
   limit = 25;
 
+  @Transform(toBoolean)
   @IsOptional()
   @IsBoolean()
   activeOnly?: boolean;
