@@ -1,7 +1,9 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard, AuthenticatedRequest } from '../auth/auth.guard';
 import { CreatePaymentIntentDto, PaymentWebhookDto } from './payments.dto';
 import { PaymentsService } from './payments.service';
+
+type WebhookRequest = AuthenticatedRequest & { rawBody?: Buffer };
 
 @Controller('payments')
 export class PaymentsController {
@@ -19,11 +21,14 @@ export class PaymentsController {
     return this.payments.createIntent(req.user!.tenantId, dto);
   }
 
-  // Provider webhooks must be authenticated by the provider signature in production.
-  // The current endpoint is deliberately tenant-scoped for the internal adapter layer.
-  @Post('webhooks')
-  @UseGuards(AuthGuard)
-  webhook(@Req() req: AuthenticatedRequest, @Body() dto: PaymentWebhookDto) {
-    return this.payments.webhook(req.user!.tenantId, dto);
+  // Public ingress: tenant identity is carried in a signed provider request, not a NEXORA JWT.
+  @Post('webhooks/:tenantId')
+  webhook(
+    @Req() req: WebhookRequest,
+    @Headers('x-nexora-signature') signature: string | undefined,
+    @Body() dto: PaymentWebhookDto,
+  ) {
+    if (!req.rawBody) throw new Error('Raw webhook body is unavailable');
+    return this.payments.webhook(req.params.tenantId, dto, req.rawBody, signature);
   }
 }
