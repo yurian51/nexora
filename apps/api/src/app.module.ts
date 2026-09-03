@@ -9,8 +9,9 @@ import { OverviewModule } from './overview/overview.module';
 import { PackagesModule } from './packages/packages.module';
 import { PurchasesModule } from './purchases/purchases.module';
 import { PaymentsModule } from './payments/payments.module';
+import { VouchersModule } from './vouchers/vouchers.module';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), DatabaseModule, AuthModule, HealthModule, OverviewModule, CustomersModule, BillingModule, PackagesModule, PurchasesModule, PaymentsModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), DatabaseModule, AuthModule, HealthModule, OverviewModule, CustomersModule, BillingModule, PackagesModule, PurchasesModule, PaymentsModule, VouchersModule],
 })
 export class AppModule {}
